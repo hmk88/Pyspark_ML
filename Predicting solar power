@@ -1,0 +1,66 @@
+#Loading csv data 
+data = spark.read.csv("/FileStore/tables/Pyranometer.csv", header="true", inferSchema="true")
+data.cache()
+data= data.dropna()
+display (data)
+
+#preparing data for ML algorithm 
+from pyspark.sql.functions import col
+data = data.dropna()
+exprs = [col(column).alias(column.replace(' ', '_')) for column in data.columns]
+
+#Vectorize the features column
+from pyspark.ml import Pipeline 
+from pyspark.ml.feature import VectorAssembler
+#Using features to predict the label
+vdata = data.select(*exprs).selectExpr("temp as temperature", "solarpower as label")
+stages = []
+assembler = VectorAssembler(inputCols=["temperature"], outputCol="features")
+stages+= [assembler]
+pipeline = Pipeline(stages=stages)
+pipelineModel = pipeline.fit(vdata)
+dataset = pipelineModel.transform(vdata)
+selectedcols = ["features", "label"]
+display(dataset.select(selectedcols))
+
+
+#Import Linear regression class 
+from pyspark.ml.regression import LinearRegression
+
+#Define linear regression algorithm 
+lr = LinearRegression()
+
+#Fit 2 models, using different regularization parameters 
+modelA= lr.fit(dataset, {lr.regParam:0.0})
+modelB= lr.fit(dataset, {lr.regParam:100.0})
+
+#Make prediction 
+predictionsA = modelA.transform(dataset)
+display(predictionsA)
+
+#Evaluating the model 
+from pyspark.ml.evaluation import RegressionEvaluator
+evaluator = RegressionEvaluator(metricName='rmse')
+RMSE = evaluator.evaluate(predictionsA)
+print("ModelA: Root mean square error = " + str(RMSE))
+predictionsB = modelB.transform(dataset)
+RMSE = evaluator.evaluate(predictionsB)
+print("ModelB: Root mean square error = " + str(RMSE))
+
+#Plot
+import numpy as np
+from pandas import *
+from ggplot import *
+
+# Create Python DataFrame
+temperature = dataset.rdd.map(lambda p: (p.features[0])).collect()
+solarpower = dataset.rdd.map(lambda p: (p.label)).collect()
+predA = predictionsA.select("prediction").rdd.map(lambda r: r[0]).collect()
+predB = predictionsB.select("prediction").rdd.map(lambda r: r[0]).collect()
+
+# Create a pandas DataFrame
+pydf = DataFrame({'temperature':temperature,'solarpower':solarpower,'predA':predA, 'predB':predB})
+# Visualizing the Model
+# Create scatter plot and two regression models (scaling exponential) using ggplot
+p = ggplot(pydf, aes('temperature','solarpower')) + geom_point(color='blue') + geom_line(pydf, aes('temperature','predA'), color='red') + geom_line(pydf, aes('temperature','predB'), color='green') #+scale_x_log10() + scale_y_log10() ##to view the plot in log form
+display(p)
